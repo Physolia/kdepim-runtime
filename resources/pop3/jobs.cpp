@@ -18,19 +18,22 @@
 #include <QThread>
 
 POPSession::POPSession(Settings &settings, const QString &password)
-    : mProtocol(std::make_unique<POP3Protocol>(settings, password))
+    : mProtocol(new POP3Protocol(settings, password))
     , mThread(new QThread)
 {
     qRegisterMetaType<Result>();
-    connect(mProtocol.get(), &POP3Protocol::sslError, this, &POPSession::handleSslError, Qt::BlockingQueuedConnection);
+    connect(mProtocol, &POP3Protocol::sslError, this, &POPSession::handleSslError, Qt::BlockingQueuedConnection);
     mProtocol->moveToThread(mThread.get());
     mThread->start();
 }
 
 POPSession::~POPSession()
 {
-    closeSession();
-    mThread->quit();
+    QMetaObject::invokeMethod(mProtocol, [=]() {
+        Q_ASSERT(QThread::currentThread() != qApp->thread());
+        delete mProtocol;
+        mThread->quit();
+    });
     mThread->wait();
 }
 
@@ -47,7 +50,7 @@ void POPSession::handleSslError(const KSslErrorUiData &errorData)
 
 POP3Protocol *POPSession::getProtocol() const
 {
-    return mProtocol.get();
+    return mProtocol;
 }
 
 void POPSession::abortCurrentJob()
@@ -61,7 +64,7 @@ void POPSession::abortCurrentJob()
 
 void POPSession::closeSession()
 {
-    QMetaObject::invokeMethod(mProtocol.get(), [=]() {
+    QMetaObject::invokeMethod(mProtocol, [=]() {
         Q_ASSERT(QThread::currentThread() != qApp->thread());
         mProtocol->closeConnection();
     });
@@ -280,7 +283,8 @@ QuitJob::QuitJob(POPSession *popSession)
 
 void QuitJob::start()
 {
-    startJob(QStringLiteral("/quit"));
+    mPOPSession->closeSession();
+    Q_EMIT jobDone(Result::pass());
 }
 
 FetchJob::FetchJob(POPSession *session)
