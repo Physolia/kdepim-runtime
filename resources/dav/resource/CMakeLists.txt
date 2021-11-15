@@ -83,7 +83,6 @@ target_link_libraries(akonadi_davgroupware_resource
     KF5::KIOCore
     KF5::AkonadiAgentBase
     KF5::AkonadiCore
-    KF5::Wallet
     KF5::CalendarCore
     KF5::Completion
     KF5::ConfigCore
@@ -92,6 +91,7 @@ target_link_libraries(akonadi_davgroupware_resource
     KF5::DAV
     KF5::Service
     Qt::Xml
+    qt5keychain
     )
 
 install(TARGETS akonadi_davgroupware_resource ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
