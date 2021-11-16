@@ -1,6 +1,7 @@
 /*
     SPDX-FileCopyrightText: 2011-2013 Dan Vratil <dan@progdan.cz>
     SPDX-FileCopyrightText: 2020 Igor Poboiko <igor.poboiko@gmail.com>
+    SPDX-FileCopyrightText: 2021 Carl Schwan <carl@carlschwan.eu>
 
     SPDX-License-Identifier: GPL-3.0-or-later
 */
@@ -9,60 +10,59 @@
 #include "googleresource_debug.h"
 
 #include <KGAPI/Account>
-#include <KWallet>
 
-using namespace KWallet;
+#ifdef __linux__
+#include <QDBusMetaType>
+#endif
+#include <QDataStream>
+
+#include <qt5keychain/keychain.h>
+using namespace QKeychain;
+
 using namespace KGAPI2;
 
 static const QString googleWalletFolder = QStringLiteral("Akonadi Google");
 
+#ifdef __linux__ // Use same serialization as KWallet to keep compatibility
+typedef QMap<QString, QByteArray> StringByteArrayMap;
+Q_DECLARE_METATYPE(StringByteArrayMap)
+#endif
+
 GoogleSettings::GoogleSettings()
     : m_winId(0)
 {
-    m_wallet = Wallet::openWallet(Wallet::NetworkWallet(), m_winId, Wallet::Asynchronous);
-    if (m_wallet) {
-        connect(m_wallet.data(), &Wallet::walletOpened, this, &GoogleSettings::slotWalletOpened);
-    } else {
-        qCWarning(GOOGLE_LOG) << "Failed to open wallet!";
-    }
+#ifdef __linux__
+    qDBusRegisterMetaType<StringByteArrayMap>();
+#endif
+
+    // First read from QtKeyChain
+    auto job = new QKeychain::ReadPasswordJob(googleWalletFolder);
+    connect(job, &QKeychain::Job::finished, this, [this, job]() {
+        if (job->error() != QKeychain::Error::NoError) {
+            Q_EMIT accountReady(false);
+            return;
+        }
+
+        // Found something with QtKeyChain
+        if (!account().isEmpty()) {
+            m_account = fetchAccountFromKeychain(account(), job);
+        }
+        m_isReady = true;
+        Q_EMIT accountReady(true);
+    });
 }
 
-void GoogleSettings::slotWalletOpened(bool success)
+KGAPI2::AccountPtr GoogleSettings::fetchAccountFromKeychain(const QString &accountName, QKeychain::ReadPasswordJob *job)
 {
-    if (!success) {
-        qCWarning(GOOGLE_LOG) << "Failed to open wallet!";
-        Q_EMIT accountReady(false);
-        return;
-    }
-
-    if (!m_wallet->hasFolder(googleWalletFolder) && !m_wallet->createFolder(googleWalletFolder)) {
-        qCWarning(GOOGLE_LOG) << "Failed to create wallet folder" << googleWalletFolder;
-        Q_EMIT accountReady(false);
-        return;
-    }
-
-    if (!m_wallet->setFolder(googleWalletFolder)) {
-        qWarning() << "Failed to open wallet folder" << googleWalletFolder;
-        Q_EMIT accountReady(false);
-        return;
-    }
-    qCDebug(GOOGLE_LOG) << "Wallet opened, reading" << account();
-    if (!account().isEmpty()) {
-        m_account = fetchAccountFromWallet(account());
-    }
-    m_isReady = true;
-    Q_EMIT accountReady(true);
-}
-
-KGAPI2::AccountPtr GoogleSettings::fetchAccountFromWallet(const QString &accountName)
-{
-    if (!m_wallet->entryList().contains(accountName)) {
+    QMap<QString, QString> map;
+    auto value = job->binaryData();
+    if (!value.isEmpty()) {
         qCDebug(GOOGLE_LOG) << "Account" << accountName << "not found in KWallet";
         return AccountPtr();
     }
 
-    QMap<QString, QString> map;
-    m_wallet->readMap(accountName, map);
+    QDataStream ds(&value, QIODevice::ReadOnly);
+    ds >> map;
 
     const QStringList scopes = map[QStringLiteral("scopes")].split(QLatin1Char(','), Qt::SkipEmptyParts);
     QList<QUrl> scopeUrls;
@@ -90,16 +90,19 @@ bool GoogleSettings::storeAccount(AccountPtr account)
         scopes << url.toString();
     }
 
-    QMap<QString, QString> map;
-    map[QStringLiteral("accessToken")] = m_account->accessToken();
-    map[QStringLiteral("refreshToken")] = m_account->refreshToken();
-    map[QStringLiteral("scopes")] = scopes.join(QLatin1Char(','));
-    // Removing previous junk (if present)
-    cleanup();
-    if (m_wallet->writeMap(m_account->accountName(), map) != 0) {
-        qCWarning(GOOGLE_LOG) << "Failed to write new account entry to wallet";
-        return false;
-    }
+    const QMap<QString, QString> map = {{QStringLiteral("accessToken"), m_account->accessToken()},
+                                        {QStringLiteral("refreshToken"), m_account->refreshToken()},
+                                        {QStringLiteral("scopes"), scopes.join(QLatin1Char(','))}};
+
+    // Legacy: store the map exactly like Kwallet is doing it
+    QByteArray mapData;
+    QDataStream ds(&mapData, QIODevice::WriteOnly);
+    ds << map;
+
+    auto writeJob = new WritePasswordJob(googleWalletFolder, this);
+    writeJob->setKey(m_account->accountName());
+    writeJob->setBinaryData(mapData);
+    writeJob->start();
     SettingsBase::setAccount(m_account->accountName());
     m_isReady = true;
     return true;
@@ -107,8 +110,10 @@ bool GoogleSettings::storeAccount(AccountPtr account)
 
 void GoogleSettings::cleanup()
 {
-    if (m_account && m_wallet) {
-        m_wallet->removeEntry(m_account->accountName());
+    if (m_account) {
+        auto deleteJob = new DeletePasswordJob(googleWalletFolder, this);
+        deleteJob->setKey(m_account->accountName());
+        deleteJob->start();
     }
 }
 

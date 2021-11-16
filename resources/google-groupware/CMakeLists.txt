@@ -83,7 +83,6 @@ target_link_libraries(akonadi_google_resource
   KF5::AkonadiAgentBase
   KF5::CalendarCore
   KF5::Contacts
-  KF5::Wallet
   KF5::I18n
   KF5::WindowSystem
   KF5::TextWidgets
@@ -92,6 +91,7 @@ target_link_libraries(akonadi_google_resource
   KPim::GAPIContacts
   KPim::GAPICore
   KPim::GAPITasks
+  qt5keychain
 )
 
 install(TARGETS akonadi_google_resource ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})

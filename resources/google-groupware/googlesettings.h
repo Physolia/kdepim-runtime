@@ -14,9 +14,9 @@
 
 #include <KGAPI/Types>
 
-namespace KWallet
+namespace QKeychain
 {
-class Wallet;
+class ReadPasswordJob;
 }
 
 /**
@@ -51,16 +51,12 @@ public:
 Q_SIGNALS:
     void accountReady(bool ready);
     void accountChanged();
-private Q_SLOTS:
-    void slotWalletOpened(bool success);
 
 private:
     WId m_winId;
     QString m_resourceId;
     bool m_isReady = false;
     KGAPI2::AccountPtr m_account;
-    QPointer<KWallet::Wallet> m_wallet;
-
-    KGAPI2::AccountPtr fetchAccountFromWallet(const QString &accountName);
+    KGAPI2::AccountPtr fetchAccountFromKeychain(const QString &accountName, QKeychain::ReadPasswordJob *job);
 };
 
